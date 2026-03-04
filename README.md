@@ -14,6 +14,19 @@
 > รันตามลำดับ **setup → verify** เสมอ
 
 ---
+## วิธีรัน
+
+### 1. Setup Object Cache ตั้งค่า
+
+```bash
+curl -s "https://raw.githubusercontent.com/ufavision/litespeed-object-cache/main/setup-object-cache.sh" | bash
+```
+
+### 2. Verify Object Cache ตรวจสอบผลลัพธ์
+
+```bash
+curl -s "https://raw.githubusercontent.com/ufavision/litespeed-object-cache/main/verify-object-cache.sh" | bash
+```
 
 ## ทำอะไร?
 
@@ -53,22 +66,6 @@
 | Redis | ต้องรันอยู่และมี socket ที่ `/var/run/redis/redis.sock` |
 | Plugin | LiteSpeed Cache ต้องติดตั้งและเปิดใช้งานอยู่ |
 | เหมาะกับ | เซิร์ฟเวอร์ cPanel / DirectAdmin ที่มีหลาย user |
-
----
-
-## วิธีรัน
-
-### 1. Setup Object Cache ตั้งค่า
-
-```bash
-curl -s "https://raw.githubusercontent.com/ufavision/litespeed-object-cache/main/setup-object-cache.sh" | bash
-```
-
-### 2. Verify Object Cache ตรวจสอบผลลัพธ์
-
-```bash
-curl -s "https://raw.githubusercontent.com/ufavision/litespeed-object-cache/main/verify-object-cache.sh" | bash
-```
 
 ---
 
