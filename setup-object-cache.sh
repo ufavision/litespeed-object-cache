@@ -6,6 +6,11 @@ RESULT_DIR="/tmp/lscwp-setup-$$"
 RAM_PER_JOB_MB=200
 WP_TIMEOUT=30
 
+# ====================================
+# รองรับ /home และ /home2
+# ====================================
+HOME_DIRS=(/home /home2)
+
 log() {
     local DATE=$(date '+%Y-%m-%d %H:%M:%S')
     echo "$1"
@@ -62,6 +67,16 @@ fi
 [ "$MAX_JOBS" -lt 1 ] && MAX_JOBS=1
 [ "$MAX_JOBS" -gt 20 ] && MAX_JOBS=20
 
+# ====================================
+# แสดง home directories ที่พบ
+# ====================================
+FOUND_HOMES=()
+for base in "${HOME_DIRS[@]}"; do
+    if [ -d "$base" ]; then
+        FOUND_HOMES+=("$base")
+    fi
+done
+
 log "======================================"
 log " LITESPEED OBJECT CACHE SETUP"
 log " เริ่มเวลา      : $(date '+%Y-%m-%d %H:%M:%S')"
@@ -70,21 +85,53 @@ log " Total RAM     : $TOTAL_RAM_MB MB"
 log " Auto MAX_JOBS : $MAX_JOBS"
 log " Redis Status  : ✅ PONG"
 log " WP-CLI        : ✅ $(wp --version --allow-root 2>/dev/null)"
+log " Home Dirs     : ${FOUND_HOMES[*]}"
 log "======================================"
 
 # ====================================
-# หา WordPress ทั้งหมด
+# หา WordPress ทั้งหมด (รองรับ /home และ /home2)
 # ====================================
 DIRS=()
-for dir in /home/*/public_html/*/; do
-    if [ -f "${dir}wp-config.php" ]; then
-        DIRS+=("$dir")
-    fi
+for base in "${HOME_DIRS[@]}"; do
+    [ -d "$base" ] || continue
+
+    for userhome in "${base}"/*/; do
+        [ -d "${userhome}public_html" ] || continue
+
+        # WordPress ที่ติดตั้งตรง public_html (main domain)
+        if [ -f "${userhome}public_html/wp-config.php" ]; then
+            DIRS+=("${userhome}public_html/")
+        fi
+
+        # WordPress ใน subdirectory ของ public_html (addon/subdomain)
+        for subdir in "${userhome}"public_html/*/; do
+            if [ -f "${subdir}wp-config.php" ]; then
+                DIRS+=("$subdir")
+            fi
+        done
+    done
 done
 
 TOTAL=${#DIRS[@]}
 log "พบ WordPress ทั้งหมด: $TOTAL เว็บ"
 log "======================================"
+
+if [ "$TOTAL" -eq 0 ]; then
+    log "ไม่พบเว็บ WordPress ใดๆ ในระบบ"
+    exit 0
+fi
+
+# ====================================
+# ฟังก์ชันดึงชื่อ SITE แบบยืดหยุ่น
+# รองรับทุก path ไม่ว่าจะ /home หรือ /home2
+# ====================================
+get_site_name() {
+    local dir="$1"
+    local USERNAME=$(basename "$(dirname "$(dirname "$dir")")")
+    local SUBDIR=${dir#*public_html/}
+    SUBDIR=${SUBDIR%/}
+    echo "${USERNAME}/${SUBDIR:-main}"
+}
 
 # ====================================
 # PHASE 1: Check
@@ -98,8 +145,13 @@ check_site() {
     local LOCK_FILE="$3"
     local RESULT_DIR="$4"
     local WP_TIMEOUT="$5"
-    local SITE=$(echo "$dir" | awk -F'/' '{print $5"/"$7}')
     local UNIQUE="${BASHPID}_$(date +%s%N)"
+
+    # ดึงชื่อ SITE แบบยืดหยุ่น
+    local USERNAME=$(basename "$(dirname "$(dirname "$dir")")")
+    local SUBDIR=${dir#*public_html/}
+    SUBDIR=${SUBDIR%/}
+    local SITE="${USERNAME}/${SUBDIR:-main}"
 
     _log() {
         local DATE=$(date '+%Y-%m-%d %H:%M:%S')
@@ -112,13 +164,13 @@ check_site() {
     }
 
     if ! _wp plugin is-installed litespeed-cache; then
-        _log "⏭  NO LITESPEED: $SITE"
+        _log "⏭  NO LITESPEED: $SITE ($dir)"
         touch "${RESULT_DIR}/check/noplugin_${UNIQUE}"
         return
     fi
 
     if ! _wp plugin is-active litespeed-cache; then
-        _log "⏭  INACTIVE: $SITE"
+        _log "⏭  INACTIVE: $SITE ($dir)"
         touch "${RESULT_DIR}/check/inactive_${UNIQUE}"
         return
     fi
@@ -189,8 +241,13 @@ fix_site() {
     local LOCK_FILE="$3"
     local RESULT_DIR="$4"
     local WP_TIMEOUT="$5"
-    local SITE=$(echo "$dir" | awk -F'/' '{print $5"/"$7}')
     local UNIQUE="${BASHPID}_$(date +%s%N)"
+
+    # ดึงชื่อ SITE แบบยืดหยุ่น
+    local USERNAME=$(basename "$(dirname "$(dirname "$dir")")")
+    local SUBDIR=${dir#*public_html/}
+    SUBDIR=${SUBDIR%/}
+    local SITE="${USERNAME}/${SUBDIR:-main}"
 
     _log() {
         local DATE=$(date '+%Y-%m-%d %H:%M:%S')
@@ -214,7 +271,7 @@ fix_site() {
     _wp litespeed-option set object-pswd " " || FAILED=1
 
     if [ "$FAILED" -eq 1 ]; then
-        _log "❌ FAILED (Set Error): $SITE"
+        _log "❌ FAILED (Set Error): $SITE ($dir)"
         touch "${RESULT_DIR}/fix/failed_${UNIQUE}"
         return
     fi
