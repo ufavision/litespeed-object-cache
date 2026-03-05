@@ -272,18 +272,51 @@ check_site() {
         return
     fi
 
-    local CUR_OBJ=$(_wp litespeed-option get object | tr -d '[:space:]')
+    # อ่านค่าปัจจุบันทั้ง 6 fields
+    local CUR_OBJ=$(_wp  litespeed-option get object      | tr -d '[:space:]')
     local CUR_KIND=$(_wp litespeed-option get object-kind | tr -d '[:space:]')
     local CUR_HOST=$(_wp litespeed-option get object-host | tr -d '[:space:]')
     local CUR_PORT=$(_wp litespeed-option get object-port | tr -d '[:space:]')
+    local CUR_USER=$(_wp litespeed-option get object-user | tr -d '[:space:]')
+    local CUR_PSWD=$(_wp litespeed-option get object-pswd | tr -d '[:space:]')
 
-    if [ "$CUR_OBJ" = "1" ] && [ "$CUR_KIND" = "1" ] && \
-       [ "$CUR_HOST" = "/var/run/redis/redis.sock" ] && [ "$CUR_PORT" = "0" ]; then
-        _log "✅ CORRECT: $SITE"
+    # เช็คทีละ field และสะสม list สิ่งที่ต้องแก้
+    local OK=1
+    local FIX_MSG=""
+
+    if [ "$CUR_OBJ"  != "1" ]; then
+        OK=0
+        FIX_MSG+="\n   ❌ object cache  : OFF           → ต้องการ: ON (1)"
+    fi
+    if [ "$CUR_KIND" != "1" ]; then
+        OK=0
+        FIX_MSG+="\n   ❌ method        : ${CUR_KIND:-empty}     → ต้องการ: 1 (Redis)"
+    fi
+    if [ "$CUR_HOST" != "/var/run/redis/redis.sock" ]; then
+        OK=0
+        FIX_MSG+="\n   ❌ host          : ${CUR_HOST:-empty}     → ต้องการ: /var/run/redis/redis.sock"
+    fi
+    if [ "$CUR_PORT" != "0" ]; then
+        OK=0
+        FIX_MSG+="\n   ❌ port          : ${CUR_PORT:-empty}     → ต้องการ: 0"
+    fi
+    if [ -n "$CUR_USER" ]; then
+        OK=0
+        FIX_MSG+="\n   ❌ user          : '${CUR_USER}'          → ต้องการ: ว่างเปล่า"
+    fi
+    if [ -n "$CUR_PSWD" ]; then
+        OK=0
+        FIX_MSG+="\n   ❌ password      : '${CUR_PSWD}'          → ต้องการ: ว่างเปล่า"
+    fi
+
+    if [ "$OK" = "1" ]; then
+        _log "✅ SKIP (ตั้งค่าครบแล้ว): $SITE"
         touch "${RESULT_DIR}/check/correct_${UNIQUE}"
     else
         _log "⚠️  NEEDS FIX: $SITE"
-        _log "   object=$CUR_OBJ | kind=$CUR_KIND | host=$CUR_HOST | port=$CUR_PORT"
+        echo -e "$FIX_MSG" | while IFS= read -r line; do
+            [ -n "$line" ] && _log "$line"
+        done
         ( flock 200; echo "$dir" >> "$RESULT_DIR/needs_fix.txt" ) 200>"$LOCK_FILE"
         touch "${RESULT_DIR}/check/needsfix_${UNIQUE}"
     fi
