@@ -89,27 +89,28 @@ log " Home Dirs     : ${FOUND_HOMES[*]}"
 log "======================================"
 
 # ====================================
-# หา WordPress ทั้งหมด (รองรับ /home และ /home2)
+# หา WordPress ทั้งหมด (ใช้ find ค้นหาทุก level)
+# รองรับ /home และ /home2 + ทุก cPanel user
+# ค้นหา wp-config.php ทุก subdirectory ภายใต้ public_html
+# ข้าม: wp-content, backup, cache, tmp, .trash
 # ====================================
 DIRS=()
+
 for base in "${HOME_DIRS[@]}"; do
     [ -d "$base" ] || continue
 
-    for userhome in "${base}"/*/; do
-        [ -d "${userhome}public_html" ] || continue
-
-        # WordPress ที่ติดตั้งตรง public_html (main domain)
-        if [ -f "${userhome}public_html/wp-config.php" ]; then
-            DIRS+=("${userhome}public_html/")
-        fi
-
-        # WordPress ใน subdirectory ของ public_html (addon/subdomain)
-        for subdir in "${userhome}"public_html/*/; do
-            if [ -f "${subdir}wp-config.php" ]; then
-                DIRS+=("$subdir")
-            fi
-        done
-    done
+    while IFS= read -r wpconfig; do
+        WPDIR=$(dirname "$wpconfig")
+        DIRS+=("${WPDIR}/")
+    done < <(find "$base"/*/public_html -name "wp-config.php" \
+        -not -path "*/wp-content/*" \
+        -not -path "*/wp-includes/*" \
+        -not -path "*/backup*/*" \
+        -not -path "*/cache/*" \
+        -not -path "*/tmp/*" \
+        -not -path "*/.trash/*" \
+        -not -path "*/node_modules/*" \
+        2>/dev/null)
 done
 
 TOTAL=${#DIRS[@]}
@@ -120,18 +121,6 @@ if [ "$TOTAL" -eq 0 ]; then
     log "ไม่พบเว็บ WordPress ใดๆ ในระบบ"
     exit 0
 fi
-
-# ====================================
-# ฟังก์ชันดึงชื่อ SITE แบบยืดหยุ่น
-# รองรับทุก path ไม่ว่าจะ /home หรือ /home2
-# ====================================
-get_site_name() {
-    local dir="$1"
-    local USERNAME=$(basename "$(dirname "$(dirname "$dir")")")
-    local SUBDIR=${dir#*public_html/}
-    SUBDIR=${SUBDIR%/}
-    echo "${USERNAME}/${SUBDIR:-main}"
-}
 
 # ====================================
 # PHASE 1: Check
@@ -147,8 +136,9 @@ check_site() {
     local WP_TIMEOUT="$5"
     local UNIQUE="${BASHPID}_$(date +%s%N)"
 
-    # ดึงชื่อ SITE แบบยืดหยุ่น
-    local USERNAME=$(basename "$(dirname "$(dirname "$dir")")")
+    # ดึงชื่อ SITE แบบยืดหยุ่น (รองรับทุก /home* และทุก level)
+    local AFTER_HOME=${dir#/home*/}
+    local USERNAME=${AFTER_HOME%%/*}
     local SUBDIR=${dir#*public_html/}
     SUBDIR=${SUBDIR%/}
     local SITE="${USERNAME}/${SUBDIR:-main}"
@@ -243,8 +233,9 @@ fix_site() {
     local WP_TIMEOUT="$5"
     local UNIQUE="${BASHPID}_$(date +%s%N)"
 
-    # ดึงชื่อ SITE แบบยืดหยุ่น
-    local USERNAME=$(basename "$(dirname "$(dirname "$dir")")")
+    # ดึงชื่อ SITE แบบยืดหยุ่น (รองรับทุก /home* และทุก level)
+    local AFTER_HOME=${dir#/home*/}
+    local USERNAME=${AFTER_HOME%%/*}
     local SUBDIR=${dir#*public_html/}
     SUBDIR=${SUBDIR%/}
     local SITE="${USERNAME}/${SUBDIR:-main}"
