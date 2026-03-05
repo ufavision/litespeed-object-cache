@@ -201,44 +201,52 @@ DIRS=()
 
 # ====================================
 # สแกนหา WordPress ทุกเว็บบนเซิร์ฟเวอร์
-# - ใช้ find ล้วนๆ ไม่มี glob limit
-# - ข้าม wp-config.php ที่อยู่ตรง public_html root (main domain)
-# - dedup ด้วย real path ป้องกัน symlink นับซ้ำ
+# ไม่สนใจ directory structure
+# validate ด้วย wp-includes/version.php และ dedup ด้วย inode
 # ====================================
-declare -A SEEN_REAL
+declare -A SEEN_INODE
+
+# EXCLUDE patterns
+EXCLUDE_PATHS="wp-content|node_modules|\.git|/backup|softaculous_backups|wordpress-backups|/cache|/tmp|/logs|\.trash"
+
+_is_real_wp() {
+    [ -f "${1}wp-includes/version.php" ] && return 0
+    return 1
+}
+
+_add_wp_dir() {
+    local site_dir="$1"
+    local inode
+    inode=$(stat -c "%d:%i" "${site_dir}wp-config.php" 2>/dev/null) || return
+    [ -n "${SEEN_INODE[$inode]+_}" ] && return
+    SEEN_INODE[$inode]=1
+    DIRS+=("$site_dir")
+}
 
 scan_all_wordpress() {
     local base="$1"
     [ ! -d "$base" ] && return
 
-    # หา public_html ทุกอันใน base ที่ไม่ใช่ dir ใน SKIP_DIRS
-    while IFS= read -r pub; do
-        # ดึง username จาก path: /home[2]/USER/public_html
+    for user_dir in "${base}"/*/; do
+        [ ! -d "$user_dir" ] && continue
         local user
-        user=$(echo "$pub" | awk -F'/' '{print $3}')
-        # ข้าม system dirs
+        user=$(basename "$user_dir")
         echo "$user" | grep -qE "^(${SKIP_DIRS})$" && continue
 
-        # หา wp-config.php ทุกอัน ลึกได้ถึง 10 ชั้น
-        # exclude ไฟล์ที่อยู่ตรง public_html เอง (-mindepth 2 จาก public_html)
         while IFS= read -r wpconfig; do
             local site_dir
             site_dir="$(dirname "$wpconfig")/"
 
-            # dedup ด้วย real path
-            local real_dir
-            real_dir=$(realpath -s "$site_dir" 2>/dev/null || echo "$site_dir")
-            [ -n "${SEEN_REAL[$real_dir]+_}" ] && continue
-            SEEN_REAL[$real_dir]=1
+            # ข้าม path ที่อยู่ใน exclude list
+            echo "$site_dir" | grep -qE "${EXCLUDE_PATHS}" && continue
 
-            DIRS+=("$site_dir")
-        done < <(find "$pub" -mindepth 2 -maxdepth 10 \
-                    -name "wp-config.php" \
-                    -not -path "*/wp-content/*" \
-                    -not -path "*/node_modules/*" \
-                    -not -path "*/.git/*" \
-                    2>/dev/null)
-    done < <(find "$base" -mindepth 2 -maxdepth 2 -name "public_html" -type d 2>/dev/null)
+            # validate: ต้องมี wp-includes/version.php
+            _is_real_wp "$site_dir" || continue
+
+            _add_wp_dir "$site_dir"
+
+        done < <(find "$user_dir" -maxdepth 6 -name "wp-config.php" -type f 2>/dev/null)
+    done
 }
 
 scan_all_wordpress "/home"
@@ -297,22 +305,36 @@ process_site() {
         return
     fi
 
-    # --- อ่านค่าปัจจุบัน (clean quotes + whitespace ออก) ---
-    local CUR_OBJ;  CUR_OBJ=$(_clean "$(_wp_get litespeed-option get object)")
-    local CUR_KIND; CUR_KIND=$(_clean "$(_wp_get litespeed-option get object-kind)")
-    local CUR_HOST; CUR_HOST=$(_wp_get litespeed-option get object-host | tr -d '[:space:]')
-    local CUR_PORT; CUR_PORT=$(_clean "$(_wp_get litespeed-option get object-port)")
-    local CUR_USER; CUR_USER=$(_clean "$(_wp_get litespeed-option get object-user)")
-    local CUR_PSWD; CUR_PSWD=$(_clean "$(_wp_get litespeed-option get object-pswd)")
+    # --- อ่านค่าทั้งหมดใน 1 call (เร็วกว่า 6x) ---
+    local RAW_OPTS
+    RAW_OPTS=$(_wp_get litespeed-option list 2>/dev/null)
 
-    # port: litespeed เก็บ socket-port เป็น '' หรือ '0' ถือว่าเหมือนกัน
+    _get_opt() {
+        echo "$RAW_OPTS" | grep -m1 "^| $1 " | awk -F'|' '{print $3}' | tr -d '[:space:]\'"''"
+    }
+
+    local CUR_OBJ;  CUR_OBJ=$(_get_opt "object")
+    local CUR_KIND; CUR_KIND=$(_get_opt "object-kind")
+    local CUR_HOST; CUR_HOST=$(_get_opt "object-host")
+    local CUR_PORT; CUR_PORT=$(_get_opt "object-port")
+    local CUR_USER; CUR_USER=$(_get_opt "object-user")
+    local CUR_PSWD; CUR_PSWD=$(_get_opt "object-pswd")
+
+    # fallback: ถ้า list ไม่ work ให้ get ทีละตัว
+    if [ -z "$CUR_OBJ" ] && [ -z "$CUR_HOST" ]; then
+        CUR_OBJ=$(_clean "$(_wp_get litespeed-option get object)")
+        CUR_KIND=$(_clean "$(_wp_get litespeed-option get object-kind)")
+        CUR_HOST=$(_wp_get litespeed-option get object-host | tr -d '[:space:]')
+        CUR_PORT=$(_clean "$(_wp_get litespeed-option get object-port)")
+        CUR_USER=$(_clean "$(_wp_get litespeed-option get object-user)")
+        CUR_PSWD=$(_clean "$(_wp_get litespeed-option get object-pswd)")
+    fi
+
+    # normalize empty values
     [ -z "$CUR_PORT" ] && CUR_PORT="0"
-
-    # object: litespeed บางครั้ง return '' แทน '0' เมื่อยังไม่ได้ set
     [ -z "$CUR_OBJ"  ] && CUR_OBJ="0"
-
-    # kind: default เป็น memcached (0) ถ้า empty
     [ -z "$CUR_KIND" ] && CUR_KIND="0"
+
 
     # --- เช็คทีละ field เฉพาะที่ผิดจริง ---
     local NEED_FIX=()
